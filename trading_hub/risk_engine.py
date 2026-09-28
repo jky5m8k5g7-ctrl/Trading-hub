@@ -30,6 +30,14 @@ def evaluate(
     if decision.action == "HOLD" or decision.asset is None:
         return RiskVerdict(approved=False, reason="no actionable decision (HOLD)")
 
+    existing = portfolio.positions.get(decision.asset)
+    if existing is not None and existing.direction == decision.direction:
+        # Already holding this exact position - approving again would call
+        # open_position() a second time, which re-debits cash for a fresh
+        # entry and overwrites the original entry price/timestamp instead
+        # of leaving the existing position alone.
+        return RiskVerdict(approved=False, reason=f"{decision.asset} position already open in the same direction")
+
     if decision.confidence <= config.MIN_CONFIDENCE_PCT:
         return RiskVerdict(
             approved=False,

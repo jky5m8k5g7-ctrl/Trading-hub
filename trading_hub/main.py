@@ -27,7 +27,7 @@ import threading
 import time
 from typing import Callable
 
-from trading_hub import config, dashboard, executor, feature_engine, jev_engine, reasoning_layer, risk_engine, strategies
+from trading_hub import config, dashboard, database, executor, feature_engine, jev_bot, jev_dashboard, jev_engine, leaderboard, reasoning_layer, risk_engine, strategies
 from trading_hub.feature_engine import Features
 from trading_hub.jev_engine import Decision
 from trading_hub.kraken_client import KrakenClient
@@ -64,6 +64,9 @@ class Bot:
         else:
             self.portfolio = Portfolio()
 
+        database.init_db()
+        self.session_id = database.get_or_create_active_session(name, config.STARTING_CASH_USD)
+
         self.lock = threading.Lock()
         self.state_lock = threading.Lock()
         self.decision = Decision(action="HOLD", confidence=0.0, asset=None, direction=jev_engine.NEUTRAL, verdicts={})
@@ -97,9 +100,10 @@ class Bot:
         }
 
 
-def manage_open_positions(portfolio: Portfolio, verdicts: dict, prices: dict[str, float]) -> None:
+def manage_open_positions(bot: "Bot", verdicts: dict, prices: dict[str, float]) -> None:
     """Close any open position whose asset's signal has reversed or gone
     neutral, so positions don't just sit open forever once the edge is gone."""
+    portfolio = bot.portfolio
     for asset in list(portfolio.positions.keys()):
         verdict = verdicts.get(asset)
         price = prices.get(asset)
@@ -108,12 +112,22 @@ def manage_open_positions(portfolio: Portfolio, verdicts: dict, prices: dict[str
 
         position = portfolio.positions[asset]
         if verdict.direction != position.direction:
-            fee = position.size_usd * config.TAKER_FEE_FRACTION
-            pnl = portfolio.close_position(asset, price, fee_usd=fee)
+            side = "LONG" if position.direction == 1 else "SHORT"
+            entry_price, opened_at, notional = position.entry_price, position.opened_at, position.size_usd
+            fee = notional * config.TAKER_FEE_FRACTION
+            pnl = portfolio.close_position(asset, price, fee_usd=fee, exit_reason="SIGNAL_REVERSAL")
+            trade = portfolio.trade_log[-1]
             log.info(
-                "closed %s %s @ %.6f pnl=%.4f (signal now %s)",
-                _DIRECTION_LABELS[position.direction], asset, price, pnl, _DIRECTION_LABELS.get(verdict.direction, "?"),
+                "[%s] closed %s %s @ %.6f pnl=%.4f (signal now %s)",
+                bot.name, side, asset, price, pnl, _DIRECTION_LABELS.get(verdict.direction, "?"),
             )
+            database.record_trade(database.TradeRecord(
+                bot_name=bot.name, session_id=bot.session_id, asset=asset, side=side, opened_at=opened_at,
+                entry_price=entry_price, quantity=notional / entry_price if entry_price else 0.0, notional_usd=notional,
+                closed_at=trade.timestamp, exit_price=price, gross_pnl=pnl + fee, fees=fee, net_pnl=pnl,
+                holding_time_seconds=trade.holding_time_seconds, exit_reason="SIGNAL_REVERSAL",
+                equity_after=portfolio.equity(prices),
+            ))
 
 
 def merge_live_prices(candle_prices: dict[str, float], live_feed: LiveFeed) -> dict[str, float]:
@@ -174,7 +188,7 @@ def run_cycle(client: KrakenClient, bots: list[Bot], live_feed: LiveFeed) -> Non
         spread_fraction = spread_by_asset.get(decision.asset, 0.0) if decision.asset else 0.0
 
         with bot.lock:
-            manage_open_positions(bot.portfolio, decision.verdicts, prices)
+            manage_open_positions(bot, decision.verdicts, prices)
 
             risk_verdict = risk_engine.evaluate(decision, bot.portfolio, prices, spread_fraction)
             log.info("[%s] risk approved=%s reason=%s", bot.name, risk_verdict.approved, risk_verdict.reason)
@@ -195,14 +209,30 @@ def run_cycle(client: KrakenClient, bots: list[Bot], live_feed: LiveFeed) -> Non
     dashboard.write_overview([b.summary(prices) for b in bots], prices, config.OVERVIEW_HTML_PATH)
 
 
+def _jev_summary(bot: jev_bot.JevBot, prices: dict[str, float]) -> dict:
+    equity = bot.portfolio.equity(prices)
+    return {
+        "name": bot.name,
+        "html_path": bot.html_path,
+        "equity": equity,
+        "starting_equity": bot.portfolio.starting_equity,
+        "cash": bot.portfolio.cash,
+        "drawdown_pct": bot.portfolio.drawdown_pct(prices),
+        "open_positions": len(bot.portfolio.positions),
+        "last_action": bot.last_decision.action if bot.last_decision else "-",
+        "last_confidence": (bot.last_decision.winner_probability * 100) if bot.last_decision else 0.0,
+    }
+
+
 class DashboardPusher:
     """Writes every bot's dashboard (plus the overview) immediately on each
     live tick - event-driven, not polled - debounced to
     MIN_DASHBOARD_WRITE_INTERVAL_SECONDS so a tick burst across 10 assets
     doesn't turn into a disk-write storm."""
 
-    def __init__(self, bots: list[Bot], live_feed: LiveFeed):
+    def __init__(self, bots: list[Bot], jev: jev_bot.JevBot, live_feed: LiveFeed):
         self._bots = bots
+        self._jev = jev
         self._live_feed = live_feed
         self._write_lock = threading.Lock()
         self._last_write = 0.0
@@ -219,7 +249,9 @@ class DashboardPusher:
             return
         for bot in self._bots:
             bot.push_dashboard(prices)
-        dashboard.write_overview([b.summary(prices) for b in self._bots], prices, config.OVERVIEW_HTML_PATH)
+        jev_dashboard.write(self._jev, prices)
+        summaries = [b.summary(prices) for b in self._bots] + [_jev_summary(self._jev, prices)]
+        dashboard.write_overview(summaries, prices, config.OVERVIEW_HTML_PATH)
 
 
 def heartbeat_loop(pusher: DashboardPusher, stop_event: threading.Event) -> None:
@@ -232,10 +264,11 @@ def heartbeat_loop(pusher: DashboardPusher, stop_event: threading.Event) -> None
 def main() -> None:
     client = KrakenClient()
     bots = [Bot(name, decide_fn) for name, decide_fn in STRATEGIES.items()]
+    jev = jev_bot.JevBot()
 
     stop_event = threading.Event()
     live_feed = LiveFeed()
-    pusher = DashboardPusher(bots, live_feed)
+    pusher = DashboardPusher(bots, jev, live_feed)
     live_feed.on_tick(pusher.push)
     live_feed.start()
 
@@ -243,7 +276,7 @@ def main() -> None:
     heartbeat_thread.start()
 
     log.info(
-        "starting trading hub: %d bots (%s), decisions every %ss, dashboards pushed on every live tick",
+        "starting trading hub: %d legacy bots (%s) + Jev, decisions every %ss, dashboards pushed on every live tick",
         len(bots), ", ".join(b.name for b in bots), config.POLL_INTERVAL_SECONDS,
     )
     try:
@@ -252,6 +285,15 @@ def main() -> None:
                 run_cycle(client, bots, live_feed)
             except Exception:
                 log.exception("cycle failed")
+            try:
+                jev.run_cycle(client, live_feed)
+                jev_dashboard.write(jev, live_feed.get_prices())
+            except Exception:
+                log.exception("[jev] cycle failed")
+            try:
+                leaderboard.write()
+            except Exception:
+                log.exception("leaderboard write failed")
             time.sleep(config.POLL_INTERVAL_SECONDS)
     finally:
         stop_event.set()

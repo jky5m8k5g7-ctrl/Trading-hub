@@ -54,3 +54,27 @@ def test_wide_spread_relative_to_edge_is_rejected():
     verdict = risk_engine.evaluate(decision, portfolio, {"BTC": 100.0}, spread_fraction=0.20)
     assert not verdict.approved
     assert "fee/spread" in verdict.reason
+
+
+def test_same_direction_position_already_open_is_rejected():
+    # Regression: open_position() overwrites in place rather than stacking
+    # when called twice for the same asset+direction, silently re-debiting
+    # cash for a "new" entry on top of the existing one. risk_engine must
+    # never approve a second same-direction entry while one is still open.
+    portfolio = Portfolio()
+    portfolio.open_position("BTC", direction=1, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+    decision = make_decision(confidence=95.0, direction=1)
+    verdict = risk_engine.evaluate(decision, portfolio, {"BTC": 100.0}, spread_fraction=0.0, now=100_000)
+    assert not verdict.approved
+    assert "already open" in verdict.reason
+
+
+def test_opposite_direction_position_open_is_still_approved():
+    # An opposite-direction signal is a legitimate flip - main.py's
+    # manage_open_positions() closes the old position before risk_engine
+    # ever sees the new decision, so this must NOT be blocked here.
+    portfolio = Portfolio()
+    portfolio.open_position("BTC", direction=1, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+    decision = make_decision(confidence=95.0, direction=-1)
+    verdict = risk_engine.evaluate(decision, portfolio, {"BTC": 100.0}, spread_fraction=0.0, now=100_000)
+    assert verdict.approved

@@ -1,4 +1,4 @@
-from trading_hub import jev_engine, main
+from trading_hub import database, jev_engine, main
 from trading_hub.jev_engine import AssetVerdict
 from trading_hub.portfolio import Portfolio
 
@@ -15,44 +15,66 @@ class FakeLiveFeed:
         return self._ages.get(asset, float("inf"))
 
 
-def test_manage_open_positions_closes_on_signal_flip():
-    portfolio = Portfolio(cash=1000.0)
-    portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+class FakeBot:
+    """Minimal stand-in for main.Bot: manage_open_positions only needs
+    .portfolio, .name, and .session_id."""
+
+    def __init__(self, portfolio, name="test_bot"):
+        self.portfolio = portfolio
+        self.name = name
+        self.session_id = database.get_or_create_active_session(name, portfolio.starting_equity)
+
+
+def _bot_with_db(tmp_path, monkeypatch, cash=1000.0):
+    # config.DATABASE_PATH is a relative path and database.py's functions
+    # bind it as a default at import time, so chdir (not monkeypatching the
+    # config value) is what actually isolates each test's database.
+    monkeypatch.chdir(tmp_path)
+    database.init_db()
+    return FakeBot(Portfolio(cash=cash))
+
+
+def test_manage_open_positions_closes_on_signal_flip(tmp_path, monkeypatch):
+    bot = _bot_with_db(tmp_path, monkeypatch)
+    bot.portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
 
     verdicts = {"BTC": AssetVerdict(asset="BTC", direction=jev_engine.SHORT, confidence=80.0, votes={})}
-    main.manage_open_positions(portfolio, verdicts, {"BTC": 105.0})
+    main.manage_open_positions(bot, verdicts, {"BTC": 105.0})
 
-    assert "BTC" not in portfolio.positions
-    assert portfolio.trade_log[-1].action == "BTC_CLOSE"
+    assert "BTC" not in bot.portfolio.positions
+    assert bot.portfolio.trade_log[-1].action == "BTC_CLOSE"
+    trades = database.fetch_trades(bot.name)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "SIGNAL_REVERSAL"
 
 
-def test_manage_open_positions_closes_on_neutral_signal():
-    portfolio = Portfolio(cash=1000.0)
-    portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+def test_manage_open_positions_closes_on_neutral_signal(tmp_path, monkeypatch):
+    bot = _bot_with_db(tmp_path, monkeypatch)
+    bot.portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
 
     verdicts = {"BTC": AssetVerdict(asset="BTC", direction=jev_engine.NEUTRAL, confidence=0.0, votes={})}
-    main.manage_open_positions(portfolio, verdicts, {"BTC": 105.0})
+    main.manage_open_positions(bot, verdicts, {"BTC": 105.0})
 
-    assert "BTC" not in portfolio.positions
+    assert "BTC" not in bot.portfolio.positions
 
 
-def test_manage_open_positions_leaves_aligned_position_open():
-    portfolio = Portfolio(cash=1000.0)
-    portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+def test_manage_open_positions_leaves_aligned_position_open(tmp_path, monkeypatch):
+    bot = _bot_with_db(tmp_path, monkeypatch)
+    bot.portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
 
     verdicts = {"BTC": AssetVerdict(asset="BTC", direction=jev_engine.LONG, confidence=90.0, votes={})}
-    main.manage_open_positions(portfolio, verdicts, {"BTC": 105.0})
+    main.manage_open_positions(bot, verdicts, {"BTC": 105.0})
 
-    assert "BTC" in portfolio.positions
+    assert "BTC" in bot.portfolio.positions
 
 
-def test_manage_open_positions_skips_assets_with_no_verdict_or_price():
-    portfolio = Portfolio(cash=1000.0)
-    portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+def test_manage_open_positions_skips_assets_with_no_verdict_or_price(tmp_path, monkeypatch):
+    bot = _bot_with_db(tmp_path, monkeypatch)
+    bot.portfolio.open_position("BTC", direction=jev_engine.LONG, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
 
-    main.manage_open_positions(portfolio, {}, {})
+    main.manage_open_positions(bot, {}, {})
 
-    assert "BTC" in portfolio.positions
+    assert "BTC" in bot.portfolio.positions
 
 
 def test_merge_live_prices_prefers_fresh_live_tick():

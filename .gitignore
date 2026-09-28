@@ -10,3 +10,8 @@ state_*.json
 bot.log
 portfolio_state.json
 portfolio_state_*.json
+leaderboard.html
+trading_hub.db
+trading_hub.db-journal
+trading_hub.db-wal
+trading_hub.db-shm
