@@ -41,11 +41,19 @@ _PAGE_TEMPLATE = """<!doctype html>
   .badge.approved {{ background: #1a3a24; color: #3fb950; }}
   .badge.rejected {{ background: #3a1a1a; color: #f85149; }}
   .badge.hold {{ background: #2d2a1a; color: #d29922; }}
+  .ticker-strip {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }}
+  .ticker {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 16px; min-width: 120px; }}
+  .ticker .asset {{ color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }}
+  .ticker .price {{ font-size: 16px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }}
 </style>
 </head>
 <body>
   <h1>Trading Hub - Live Paper Dashboard</h1>
   <div class="updated">Last updated: {updated_at}</div>
+
+  <div class="ticker-strip">
+    {ticker_strip}
+  </div>
 
   <div class="cards">
     <div class="card"><div class="label">Equity</div><div class="value">${equity:,.2f}</div></div>
@@ -81,6 +89,32 @@ _PAGE_TEMPLATE = """<!doctype html>
 
 def _pnl_class(pnl: float) -> str:
     return "pos" if pnl >= 0 else "neg"
+
+
+def render_ticker_strip(prices: dict[str, float], previous_prices: dict[str, float] | None = None) -> str:
+    """Live per-asset price ticker for every configured asset, regardless of
+    whether there's an open position - colored by move since the previous
+    render so it visibly ticks."""
+    previous_prices = previous_prices or {}
+    cards = []
+    for asset in config.ASSETS:
+        price = prices.get(asset)
+        if price is None:
+            cards.append(f'<div class="ticker"><div class="asset">{html.escape(asset)}</div><div class="price">-</div></div>')
+            continue
+        prev = previous_prices.get(asset)
+        if prev is None or price == prev:
+            arrow, css_class = "", ""
+        elif price > prev:
+            arrow, css_class = " ▲", "pos"
+        else:
+            arrow, css_class = " ▼", "neg"
+        decimals = 2 if price >= 1 else 6
+        cards.append(
+            f'<div class="ticker"><div class="asset">{html.escape(asset)}</div>'
+            f'<div class="price {css_class}">${price:,.{decimals}f}{arrow}</div></div>'
+        )
+    return "".join(cards)
 
 
 def render_equity_chart(equity_history: list[dict], starting_equity: float) -> str:
@@ -203,7 +237,8 @@ def render_html(
     decision: Decision,
     risk_verdict: RiskVerdict,
     regime: RegimeAssessment | None = None,
-    refresh_seconds: int = config.POLL_INTERVAL_SECONDS,
+    previous_prices: dict[str, float] | None = None,
+    refresh_seconds: int = 2,
 ) -> str:
     equity = portfolio.equity(prices)
     drawdown = portfolio.drawdown_pct(prices)
@@ -248,9 +283,18 @@ def render_html(
         regime_source=html.escape(regime.source) if regime else "n/a",
         regime_rationale=html.escape(regime.rationale) if regime else "not assessed",
         equity_chart=render_equity_chart(portfolio.equity_history, portfolio.starting_equity),
+        ticker_strip=render_ticker_strip(prices, previous_prices),
         positions_rows=positions_rows,
         trades_rows=trades_rows,
     )
+
+
+def _read_previous_prices(state_path: str) -> dict[str, float]:
+    try:
+        with open(state_path) as f:
+            return json.load(f).get("prices", {})
+    except (FileNotFoundError, ValueError):
+        return {}
 
 
 def write_dashboard(
@@ -262,11 +306,14 @@ def write_dashboard(
     html_path: str = config.DASHBOARD_HTML_PATH,
     state_path: str = config.STATE_JSON_PATH,
 ) -> None:
+    previous_prices = _read_previous_prices(state_path)
+
     with open(html_path, "w") as f:
-        f.write(render_html(portfolio, prices, decision, risk_verdict, regime))
+        f.write(render_html(portfolio, prices, decision, risk_verdict, regime, previous_prices))
 
     state = {
         "updated_at": int(time.time()),
+        "prices": prices,
         "equity": portfolio.equity(prices),
         "cash": portfolio.cash,
         "drawdown_pct": portfolio.drawdown_pct(prices),

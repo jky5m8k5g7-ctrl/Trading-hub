@@ -15,6 +15,7 @@ import json
 import logging
 import threading
 import time
+from typing import Callable
 
 import websocket
 
@@ -48,6 +49,12 @@ class LiveFeed:
         self._ws: websocket.WebSocketApp | None = None
         self._thread: threading.Thread | None = None
         self._stopping = False
+        self._on_tick: Callable[[], None] | None = None
+
+    def on_tick(self, callback: Callable[[], None]) -> None:
+        """Register a callback fired synchronously on every tick received -
+        for pushing an update immediately instead of polling on a timer."""
+        self._on_tick = callback
 
     def get_prices(self) -> dict[str, float]:
         with self._lock:
@@ -71,6 +78,7 @@ class LiveFeed:
         if payload.get("channel") != "ticker":
             return
 
+        got_tick = False
         for row in payload.get("data", []):
             symbol = row.get("symbol")
             last = row.get("last")
@@ -80,6 +88,13 @@ class LiveFeed:
             with self._lock:
                 self._prices[asset] = float(last)
                 self._updated_at[asset] = time.time()
+            got_tick = True
+
+        if got_tick and self._on_tick is not None:
+            try:
+                self._on_tick()
+            except Exception:
+                log.exception("on_tick callback failed")
 
     def _on_error(self, ws: websocket.WebSocketApp, error: Exception) -> None:
         log.warning("live feed error: %s", error)

@@ -57,7 +57,12 @@ OHLC_LOOKBACK_CANDLES = 60
 # prefers a live tick over the last candle close when one has arrived
 # recently, so trades aren't priced off data up to a full poll interval old.
 LIVE_PRICE_MAX_AGE_SECONDS = 30
-DASHBOARD_REFRESH_SECONDS = 2
+
+# The dashboard is pushed on every tick (event-driven, not polled), debounced
+# to this floor so a multi-asset tick burst doesn't turn into a disk-write
+# storm. A slow heartbeat covers the rare case the feed goes quiet.
+MIN_DASHBOARD_WRITE_INTERVAL_SECONDS = 0.1
+DASHBOARD_HEARTBEAT_SECONDS = 5
 
 # --- Dashboard ---
 DASHBOARD_HTML_PATH = "dashboard.html"

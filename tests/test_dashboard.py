@@ -42,3 +42,41 @@ def test_write_dashboard_includes_chart_in_html(tmp_path):
     with open(html_path) as f:
         content = f.read()
     assert "<svg" in content
+
+
+def test_ticker_strip_shows_every_configured_asset():
+    prices = {"BTC": 83000.0, "ETH": 2650.0, "SOL": 119.0, "DOGE": 0.093, "XRP": 1.49}
+    html_out = dashboard.render_ticker_strip(prices)
+    for asset in prices:
+        assert asset in html_out
+
+
+def test_ticker_strip_shows_placeholder_for_missing_price():
+    html_out = dashboard.render_ticker_strip({"BTC": 83000.0})
+    assert "-" in html_out  # ETH/SOL/DOGE/XRP have no price yet
+
+
+def test_ticker_strip_marks_up_and_down_moves():
+    prices = {"BTC": 84000.0, "ETH": 2600.0}
+    previous = {"BTC": 83000.0, "ETH": 2650.0}
+    html_out = dashboard.render_ticker_strip(prices, previous)
+    assert 'class="price pos"' in html_out
+    assert 'class="price neg"' in html_out
+
+
+def test_write_dashboard_persists_prices_for_next_ticker_comparison(tmp_path):
+    from trading_hub.jev_engine import Decision
+    from trading_hub.risk_engine import RiskVerdict
+
+    portfolio = Portfolio()
+    decision = Decision(action="HOLD", confidence=0.0, asset=None, direction=0, verdicts={})
+    verdict = RiskVerdict(approved=False, reason="no actionable decision (HOLD)")
+    html_path = str(tmp_path / "dashboard.html")
+    state_path = str(tmp_path / "state.json")
+
+    dashboard.write_dashboard(portfolio, {"BTC": 100.0}, decision, verdict, html_path=html_path, state_path=state_path)
+    dashboard.write_dashboard(portfolio, {"BTC": 105.0}, decision, verdict, html_path=html_path, state_path=state_path)
+
+    with open(html_path) as f:
+        content = f.read()
+    assert 'class="price pos"' in content

@@ -4,13 +4,13 @@
   OHLC candles -> feature engine -> JEV decision -> hard risk engine ->
   paper execution. Runs every POLL_INTERVAL_SECONDS, since momentum/RSI/SMA
   are only meaningful over completed candles.
-- The live feed + dashboard refresh loop: Kraken's WebSocket ticker stream
-  keeps a live last-trade price per asset, and a fast background thread
-  redraws the dashboard from it every DASHBOARD_REFRESH_SECONDS, so
-  price/PnL/equity are never more than a couple seconds stale even between
-  decision cycles. The decision loop also prefers this live price over the
-  last candle close when pricing a trade, so fills aren't priced off data
-  up to a full poll interval old.
+- The live feed: Kraken's WebSocket ticker stream pushes a tick, and
+  DashboardPusher redraws the dashboard right then - event-driven, not on a
+  polling timer - so price/PnL/equity are as fresh as the last tick off the
+  wire, debounced only enough to avoid a disk-write storm on a multi-asset
+  tick burst. The decision loop also prefers this live price over the last
+  candle close when pricing a trade, so fills aren't priced off data up to
+  a full poll interval old.
 """
 
 from __future__ import annotations
@@ -127,17 +127,40 @@ def run_cycle(client: KrakenClient, portfolio: Portfolio, live_feed: LiveFeed, p
         shared.regime = regime
 
 
-def dashboard_refresh_loop(portfolio: Portfolio, live_feed: LiveFeed, portfolio_lock: threading.Lock, shared: SharedState, stop_event: threading.Event) -> None:
-    """Redraws the dashboard from live tick prices between decision cycles,
-    so equity/PnL don't sit stale for a full poll interval."""
-    while not stop_event.wait(config.DASHBOARD_REFRESH_SECONDS):
-        prices = live_feed.get_prices()
+class DashboardPusher:
+    """Writes the dashboard immediately on each live tick - event-driven,
+    not polled - debounced to MIN_DASHBOARD_WRITE_INTERVAL_SECONDS so a
+    tick burst across 5 assets doesn't turn into a disk-write storm."""
+
+    def __init__(self, portfolio: Portfolio, live_feed: LiveFeed, portfolio_lock: threading.Lock, shared: SharedState):
+        self._portfolio = portfolio
+        self._live_feed = live_feed
+        self._portfolio_lock = portfolio_lock
+        self._shared = shared
+        self._write_lock = threading.Lock()
+        self._last_write = 0.0
+
+    def push(self) -> None:
+        now = time.monotonic()
+        with self._write_lock:
+            if now - self._last_write < config.MIN_DASHBOARD_WRITE_INTERVAL_SECONDS:
+                return
+            self._last_write = now
+
+        prices = self._live_feed.get_prices()
         if not prices:
-            continue
-        with shared.lock:
-            decision, risk_verdict, regime = shared.decision, shared.risk_verdict, shared.regime
-        with portfolio_lock:
-            dashboard.write_dashboard(portfolio, prices, decision, risk_verdict, regime)
+            return
+        with self._shared.lock:
+            decision, risk_verdict, regime = self._shared.decision, self._shared.risk_verdict, self._shared.regime
+        with self._portfolio_lock:
+            dashboard.write_dashboard(self._portfolio, prices, decision, risk_verdict, regime)
+
+
+def heartbeat_loop(pusher: DashboardPusher, stop_event: threading.Event) -> None:
+    """Fallback push on a slow timer, only in case the tick feed goes quiet
+    for a while - the tick-driven push above is the primary path."""
+    while not stop_event.wait(config.DASHBOARD_HEARTBEAT_SECONDS):
+        pusher.push()
 
 
 def main() -> None:
@@ -149,20 +172,21 @@ def main() -> None:
     else:
         portfolio = Portfolio()
 
-    live_feed = LiveFeed()
-    live_feed.start()
-
     portfolio_lock = threading.Lock()
     shared = SharedState()
     stop_event = threading.Event()
-    refresh_thread = threading.Thread(
-        target=dashboard_refresh_loop, args=(portfolio, live_feed, portfolio_lock, shared, stop_event), daemon=True,
-    )
-    refresh_thread.start()
+
+    live_feed = LiveFeed()
+    pusher = DashboardPusher(portfolio, live_feed, portfolio_lock, shared)
+    live_feed.on_tick(pusher.push)
+    live_feed.start()
+
+    heartbeat_thread = threading.Thread(target=heartbeat_loop, args=(pusher, stop_event), daemon=True)
+    heartbeat_thread.start()
 
     log.info(
-        "starting trading hub: decisions every %ss, dashboard refresh every %ss",
-        config.POLL_INTERVAL_SECONDS, config.DASHBOARD_REFRESH_SECONDS,
+        "starting trading hub: decisions every %ss, dashboard pushed on every live tick (debounced %ss)",
+        config.POLL_INTERVAL_SECONDS, config.MIN_DASHBOARD_WRITE_INTERVAL_SECONDS,
     )
     try:
         while True:
