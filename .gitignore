@@ -6,3 +6,4 @@ state.json
 .pytest_cache/
 .env
 bot.log
+portfolio_state.json

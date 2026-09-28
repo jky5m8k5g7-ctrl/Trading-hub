@@ -13,6 +13,11 @@ from trading_hub.portfolio import Portfolio
 from trading_hub.reasoning_layer import RegimeAssessment
 from trading_hub.risk_engine import RiskVerdict
 
+_EQUITY_LINE_COLOR = "#3987e5"  # validated dark-mode categorical slot 1 (dataviz skill palette)
+_CHART_WIDTH = 680
+_CHART_HEIGHT = 180
+_CHART_PAD = {"left": 56, "right": 12, "top": 16, "bottom": 24}
+
 _PAGE_TEMPLATE = """<!doctype html>
 <html>
 <head>
@@ -53,6 +58,11 @@ _PAGE_TEMPLATE = """<!doctype html>
   </div>
   <div class="updated">Regime source: {regime_source} - {regime_rationale}</div>
 
+  <h2>Equity Curve</h2>
+  <div class="card" style="min-width: unset;">
+    {equity_chart}
+  </div>
+
   <h2>Open Positions</h2>
   <table>
     <tr><th>Asset</th><th>Direction</th><th>Size (USD)</th><th>Entry Price</th><th>Unrealized PnL</th></tr>
@@ -71,6 +81,120 @@ _PAGE_TEMPLATE = """<!doctype html>
 
 def _pnl_class(pnl: float) -> str:
     return "pos" if pnl >= 0 else "neg"
+
+
+def render_equity_chart(equity_history: list[dict], starting_equity: float) -> str:
+    """Inline SVG line chart of equity over time; no external chart library
+    since this page is opened as a local file. Single series (magnitude over
+    time), so no legend is needed - the title names it."""
+    if len(equity_history) < 2:
+        return (
+            f'<div style="height:{_CHART_HEIGHT}px;display:flex;align-items:center;'
+            f'justify-content:center;color:#8b949e;font-size:13px;">'
+            f"Not enough history yet - equity chart fills in after a few cycles.</div>"
+        )
+
+    w, h = _CHART_WIDTH, _CHART_HEIGHT
+    pad = _CHART_PAD
+    plot_w = w - pad["left"] - pad["right"]
+    plot_h = h - pad["top"] - pad["bottom"]
+
+    values = [p["equity"] for p in equity_history]
+    timestamps = [p["timestamp"] for p in equity_history]
+    lo = min(values + [starting_equity])
+    hi = max(values + [starting_equity])
+    span = hi - lo or max(abs(hi), 1.0) * 0.02  # avoid a zero-height scale on a flat line
+    lo -= span * 0.1
+    hi += span * 0.1
+    span = hi - lo
+
+    n = len(values)
+
+    def x_at(i: int) -> float:
+        return pad["left"] + (i / (n - 1)) * plot_w if n > 1 else pad["left"]
+
+    def y_at(v: float) -> float:
+        return pad["top"] + plot_h - ((v - lo) / span) * plot_h
+
+    points = [(x_at(i), y_at(v)) for i, v in enumerate(values)]
+    poly_points = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    baseline_y = pad["top"] + plot_h
+    area_path = f"M{points[0][0]:.1f},{baseline_y:.1f} " + " ".join(f"L{x:.1f},{y:.1f}" for x, y in points) + f" L{points[-1][0]:.1f},{baseline_y:.1f} Z"
+
+    start_y = y_at(starting_equity)
+    end_value = values[-1]
+    end_color = "#3fb950" if end_value >= starting_equity else "#f85149"
+
+    start_label_time = time.strftime("%H:%M", time.localtime(timestamps[0]))
+    end_label_time = time.strftime("%H:%M", time.localtime(timestamps[-1]))
+
+    js_points = json.dumps([[round(x, 1), round(y, 1), round(v, 2), t] for (x, y), v, t in zip(points, values, timestamps)])
+
+    return f"""
+<svg viewBox="0 0 {w} {h}" width="100%" height="{h}" id="equity-chart" style="overflow:visible;">
+  <defs>
+    <linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="{_EQUITY_LINE_COLOR}" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="{_EQUITY_LINE_COLOR}" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <line x1="{pad['left']}" y1="{start_y:.1f}" x2="{w - pad['right']}" y2="{start_y:.1f}"
+        stroke="#8b949e" stroke-width="1" stroke-dasharray="3,4"/>
+  <text x="{w - pad['right']}" y="{start_y - 5:.1f}" text-anchor="end" font-size="10" fill="#8b949e">start ${starting_equity:,.0f}</text>
+  <path d="{area_path}" fill="url(#equity-fill)"/>
+  <polyline points="{poly_points}" fill="none" stroke="{_EQUITY_LINE_COLOR}" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="{points[-1][0]:.1f}" cy="{points[-1][1]:.1f}" r="3.5" fill="{end_color}"/>
+  <text x="{points[-1][0]:.1f}" y="{points[-1][1] - 8:.1f}" text-anchor="end" font-size="11" font-weight="600" fill="{end_color}">${end_value:,.2f}</text>
+  <text x="{pad['left']}" y="{h - 6}" font-size="10" fill="#8b949e">{start_label_time}</text>
+  <text x="{w - pad['right']}" y="{h - 6}" text-anchor="end" font-size="10" fill="#8b949e">{end_label_time}</text>
+  <line id="equity-crosshair" x1="0" y1="{pad['top']}" x2="0" y2="{baseline_y:.1f}" stroke="#e6edf3"
+        stroke-width="1" stroke-dasharray="2,2" opacity="0" pointer-events="none"/>
+  <circle id="equity-hover-dot" cx="0" cy="0" r="4" fill="{_EQUITY_LINE_COLOR}" opacity="0" pointer-events="none"/>
+  <g id="equity-tooltip" opacity="0" pointer-events="none">
+    <rect x="0" y="0" width="120" height="34" rx="4" fill="#161b22" stroke="#30363d"/>
+    <text id="equity-tooltip-value" x="8" y="14" font-size="11" font-weight="600" fill="#e6edf3"></text>
+    <text id="equity-tooltip-time" x="8" y="27" font-size="10" fill="#8b949e"></text>
+  </g>
+  <rect x="{pad['left']}" y="0" width="{plot_w}" height="{h}" fill="transparent"
+        onmousemove="equityChartHover(event)" onmouseleave="equityChartHoverEnd()"/>
+</svg>
+<script>
+(function() {{
+  const points = {js_points};
+  const svg = document.getElementById('equity-chart');
+  window.equityChartHover = function(evt) {{
+    const rect = svg.getBoundingClientRect();
+    const scaleX = {w} / rect.width;
+    const mouseX = (evt.clientX - rect.left) * scaleX;
+    let nearest = points[0];
+    let bestDist = Infinity;
+    for (const p of points) {{
+      const dist = Math.abs(p[0] - mouseX);
+      if (dist < bestDist) {{ bestDist = dist; nearest = p; }}
+    }}
+    const [x, y, value, ts] = nearest;
+    document.getElementById('equity-crosshair').setAttribute('x1', x);
+    document.getElementById('equity-crosshair').setAttribute('x2', x);
+    document.getElementById('equity-crosshair').setAttribute('opacity', 1);
+    const dot = document.getElementById('equity-hover-dot');
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('opacity', 1);
+    const tooltip = document.getElementById('equity-tooltip');
+    const tx = Math.min(Math.max(x - 60, 4), {w} - 124);
+    const ty = Math.max(y - 44, 4);
+    tooltip.setAttribute('transform', 'translate(' + tx + ',' + ty + ')');
+    tooltip.setAttribute('opacity', 1);
+    document.getElementById('equity-tooltip-value').textContent = '$' + value.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+    document.getElementById('equity-tooltip-time').textContent = new Date(ts * 1000).toLocaleTimeString();
+  }};
+  window.equityChartHoverEnd = function() {{
+    document.getElementById('equity-crosshair').setAttribute('opacity', 0);
+    document.getElementById('equity-hover-dot').setAttribute('opacity', 0);
+    document.getElementById('equity-tooltip').setAttribute('opacity', 0);
+  }};
+}})();
+</script>
+"""
 
 
 def render_html(
@@ -123,6 +247,7 @@ def render_html(
         regime=html.escape(regime.regime) if regime else "n/a",
         regime_source=html.escape(regime.source) if regime else "n/a",
         regime_rationale=html.escape(regime.rationale) if regime else "not assessed",
+        equity_chart=render_equity_chart(portfolio.equity_history, portfolio.starting_equity),
         positions_rows=positions_rows,
         trades_rows=trades_rows,
     )

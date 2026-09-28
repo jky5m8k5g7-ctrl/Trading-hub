@@ -40,7 +40,7 @@ MIN_CONFIDENCE_PCT = 72.0
 MAX_TRADE_USD = 50.0
 MAX_DRAWDOWN_PCT = 5.0
 ALLOW_LEVERAGE = False
-COOLDOWN_SECONDS = 15 * 60
+COOLDOWN_SECONDS = 5 * 60
 MAX_FEE_SPREAD_FRACTION = 0.35  # reject if est. round-trip cost eats >35% of edge
 TAKER_FEE_FRACTION = 0.0026  # Kraken default taker fee (~0.26%)
 
@@ -48,10 +48,14 @@ TAKER_FEE_FRACTION = 0.0026  # Kraken default taker fee (~0.26%)
 STARTING_CASH_USD = 1000.0
 
 # --- Orchestration ---
-POLL_INTERVAL_SECONDS = 60
+POLL_INTERVAL_SECONDS = 20
 OHLC_INTERVAL_MINUTES = 1
 OHLC_LOOKBACK_CANDLES = 60
 
 # --- Dashboard ---
 DASHBOARD_HTML_PATH = "dashboard.html"
 STATE_JSON_PATH = "state.json"
+MAX_EQUITY_HISTORY_POINTS = 500
+
+# Persists the paper portfolio (cash, positions, trade log) across restarts.
+PORTFOLIO_STATE_PATH = "portfolio_state.json"
