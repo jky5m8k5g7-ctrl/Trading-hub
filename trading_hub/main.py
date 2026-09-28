@@ -27,7 +27,7 @@ import threading
 import time
 from typing import Callable
 
-from trading_hub import config, dashboard, database, executor, feature_engine, jev_bot, jev_dashboard, jev_engine, leaderboard, reasoning_layer, risk_engine, strategies
+from trading_hub import config, dashboard, database, executor, feature_engine, jev_bot, jev_dashboard, jev_engine, leaderboard, reasoning_layer, risk_engine, safety_guard, strategies
 from trading_hub.feature_engine import Features
 from trading_hub.jev_engine import Decision
 from trading_hub.kraken_client import KrakenClient
@@ -262,6 +262,8 @@ def heartbeat_loop(pusher: DashboardPusher, stop_event: threading.Event) -> None
 
 
 def main() -> None:
+    safety_guard.check()  # fatal on any violation - never caught here
+
     client = KrakenClient()
     bots = [Bot(name, decide_fn) for name, decide_fn in STRATEGIES.items()]
     jev = jev_bot.JevBot()

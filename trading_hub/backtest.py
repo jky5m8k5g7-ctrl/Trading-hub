@@ -44,6 +44,38 @@ class BacktestResult:
     trades_opened: int = 0
 
 
+def summarize(result: BacktestResult) -> dict:
+    """Basic performance summary computed directly from the backtest's own
+    portfolio (trade_log + equity_history) - no database involved, so this
+    works standalone for a single backtest run or inside walk_forward.py's
+    repeated train/test windows."""
+    closed = [t for t in result.portfolio.trade_log if t.action.endswith("_CLOSE")]
+    net_pnls = [t.pnl_usd for t in closed]
+    wins = [p for p in net_pnls if p > 0]
+    losses = [p for p in net_pnls if p <= 0]
+
+    equity_values = [e["equity"] for e in result.portfolio.equity_history]
+    peak = equity_values[0] if equity_values else result.portfolio.starting_equity
+    max_dd = 0.0
+    for e in equity_values:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - e) / peak * 100)
+
+    final_equity = equity_values[-1] if equity_values else result.portfolio.starting_equity
+    net_pnl = sum(net_pnls)
+    return {
+        "bars_processed": result.bars_processed,
+        "trades_closed": len(closed),
+        "net_pnl": net_pnl,
+        "return_pct": (net_pnl / result.portfolio.starting_equity * 100) if result.portfolio.starting_equity else 0.0,
+        "final_equity": final_equity,
+        "max_drawdown_pct": max_dd,
+        "win_rate": (len(wins) / len(closed) * 100) if closed else 0.0,
+        "profit_factor": (sum(wins) / abs(sum(losses))) if losses and sum(losses) != 0 else (float("inf") if wins else 0.0),
+    }
+
+
 def _synthetic_spread_fraction(candle: Candle) -> float:
     """No bid/ask in historical OHLC data - approximate the spread from the
     bar's own high/low range, floored at a realistic minimum. This is a
