@@ -4,3 +4,4 @@ __pycache__/
 dashboard.html
 state.json
 .pytest_cache/
+.env

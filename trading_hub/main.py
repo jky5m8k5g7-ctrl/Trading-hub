@@ -1,20 +1,23 @@
 """Orchestrates one full cycle of the pipeline, on a loop:
 
-Kraken live data -> feature engine -> JEV decision -> hard risk engine
--> paper execution -> dashboard.
+Reasoning layer -> Kraken live data -> feature engine -> JEV decision
+-> hard risk engine -> paper execution -> dashboard.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 
-from trading_hub import config, dashboard, executor, feature_engine, jev_engine, risk_engine
+from trading_hub import config, dashboard, executor, feature_engine, jev_engine, reasoning_layer, risk_engine
 from trading_hub.kraken_client import KrakenClient
 from trading_hub.portfolio import Portfolio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("trading_hub")
+
+_DIRECTION_LABELS = {jev_engine.LONG: "LONG", jev_engine.SHORT: "SHORT"}
 
 
 def run_cycle(client: KrakenClient, portfolio: Portfolio) -> None:
@@ -30,7 +33,17 @@ def run_cycle(client: KrakenClient, portfolio: Portfolio) -> None:
             log.exception("failed to fetch OHLC for %s (%s)", asset, pair)
 
     features = feature_engine.compute_all_features(candles_by_asset)
+
+    regime = reasoning_layer.assess_regime(features)
+    log.info("regime=%s (%s) rationale=%s", regime.regime, regime.source, regime.rationale)
+
     decision = jev_engine.decide(features)
+    direction_label = _DIRECTION_LABELS.get(decision.direction)
+    if direction_label is not None:
+        adjusted_confidence = reasoning_layer.apply_regime_adjustment(decision.confidence, direction_label, regime)
+        if adjusted_confidence != decision.confidence:
+            log.info("regime adjustment: %.1f%% -> %.1f%%", decision.confidence, adjusted_confidence)
+            decision = dataclasses.replace(decision, confidence=adjusted_confidence)
     log.info("decision=%s confidence=%.1f%%", decision.action, decision.confidence)
 
     spread_fraction = 0.0
@@ -47,7 +60,7 @@ def run_cycle(client: KrakenClient, portfolio: Portfolio) -> None:
         result = executor.execute(decision, risk_verdict, portfolio, prices[decision.asset])
         log.info("execution executed=%s reason=%s", result.executed, result.reason)
 
-    dashboard.write_dashboard(portfolio, prices, decision, risk_verdict)
+    dashboard.write_dashboard(portfolio, prices, decision, risk_verdict, regime)
 
 
 def main() -> None:

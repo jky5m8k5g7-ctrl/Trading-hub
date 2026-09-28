@@ -10,6 +10,7 @@ from dataclasses import asdict
 from trading_hub import config
 from trading_hub.jev_engine import Decision
 from trading_hub.portfolio import Portfolio
+from trading_hub.reasoning_layer import RegimeAssessment
 from trading_hub.risk_engine import RiskVerdict
 
 _PAGE_TEMPLATE = """<!doctype html>
@@ -48,7 +49,9 @@ _PAGE_TEMPLATE = """<!doctype html>
     <div class="card"><div class="label">Last Decision</div><div class="value">{action}</div></div>
     <div class="card"><div class="label">Confidence</div><div class="value">{confidence:.1f}%</div></div>
     <div class="card"><div class="label">Risk Verdict</div><div class="value">{risk_badge}</div></div>
+    <div class="card"><div class="label">Market Regime</div><div class="value">{regime}</div></div>
   </div>
+  <div class="updated">Regime source: {regime_source} - {regime_rationale}</div>
 
   <h2>Open Positions</h2>
   <table>
@@ -75,6 +78,7 @@ def render_html(
     prices: dict[str, float],
     decision: Decision,
     risk_verdict: RiskVerdict,
+    regime: RegimeAssessment | None = None,
     refresh_seconds: int = config.POLL_INTERVAL_SECONDS,
 ) -> str:
     equity = portfolio.equity(prices)
@@ -116,6 +120,9 @@ def render_html(
         action=html.escape(decision.action),
         confidence=decision.confidence,
         risk_badge=risk_badge,
+        regime=html.escape(regime.regime) if regime else "n/a",
+        regime_source=html.escape(regime.source) if regime else "n/a",
+        regime_rationale=html.escape(regime.rationale) if regime else "not assessed",
         positions_rows=positions_rows,
         trades_rows=trades_rows,
     )
@@ -126,11 +133,12 @@ def write_dashboard(
     prices: dict[str, float],
     decision: Decision,
     risk_verdict: RiskVerdict,
+    regime: RegimeAssessment | None = None,
     html_path: str = config.DASHBOARD_HTML_PATH,
     state_path: str = config.STATE_JSON_PATH,
 ) -> None:
     with open(html_path, "w") as f:
-        f.write(render_html(portfolio, prices, decision, risk_verdict))
+        f.write(render_html(portfolio, prices, decision, risk_verdict, regime))
 
     state = {
         "updated_at": int(time.time()),
@@ -139,6 +147,7 @@ def write_dashboard(
         "drawdown_pct": portfolio.drawdown_pct(prices),
         "decision": {"action": decision.action, "confidence": decision.confidence},
         "risk": {"approved": risk_verdict.approved, "reason": risk_verdict.reason},
+        "regime": {"regime": regime.regime, "source": regime.source, "rationale": regime.rationale} if regime else None,
         "positions": {
             asset: {**asdict(pos), "unrealized_pnl": pos.unrealized_pnl(prices.get(asset, pos.entry_price))}
             for asset, pos in portfolio.positions.items()

@@ -7,6 +7,10 @@ fee/spread checks.
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Kraken pair codes keyed by our internal asset symbol.
 ASSETS: dict[str, str] = {
     "BTC": "XXBTZUSD",
