@@ -52,6 +52,13 @@ POLL_INTERVAL_SECONDS = 20
 OHLC_INTERVAL_MINUTES = 1
 OHLC_LOOKBACK_CANDLES = 60
 
+# --- Live price feed (Kraken WS v2) ---
+# The decision loop still reasons over OHLC candles, but execution/marking
+# prefers a live tick over the last candle close when one has arrived
+# recently, so trades aren't priced off data up to a full poll interval old.
+LIVE_PRICE_MAX_AGE_SECONDS = 30
+DASHBOARD_REFRESH_SECONDS = 2
+
 # --- Dashboard ---
 DASHBOARD_HTML_PATH = "dashboard.html"
 STATE_JSON_PATH = "state.json"
