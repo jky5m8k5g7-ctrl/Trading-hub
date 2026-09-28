@@ -11,24 +11,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Kraken pair codes keyed by our internal asset symbol.
+# Kraken pair codes keyed by our internal asset symbol. Chosen from Kraken's
+# full ~670-pair USD market by ranking 24h quote volume (volume * vwap) via
+# the public Ticker endpoint and keeping the top 10 - see the research in
+# the commit that introduced this list. Re-run that ranking periodically to
+# refresh the universe as liquidity shifts.
 ASSETS: dict[str, str] = {
     "BTC": "XXBTZUSD",
-    "ETH": "XETHZUSD",
-    "SOL": "SOLUSD",
-    "DOGE": "XDGUSD",
     "XRP": "XXRPZUSD",
+    "SOL": "SOLUSD",
+    "ETH": "XETHZUSD",
+    "NEAR": "NEARUSD",
+    "LTC": "XLTCZUSD",
+    "LINK": "LINKUSD",
+    "DOGE": "XDGUSD",
+    "UNI": "UNIUSD",
+    "ARB": "ARBUSD",
 }
 
-# All actions the JEV decision layer may output.
-ACTIONS: list[str] = [
-    "BTC_LONG", "BTC_SHORT",
-    "ETH_LONG", "ETH_SHORT",
-    "SOL_LONG", "SOL_SHORT",
-    "DOGE_LONG", "DOGE_SHORT",
-    "XRP_LONG", "XRP_SHORT",
-    "HOLD",
-]
+# All actions any strategy's decision layer may output.
+ACTIONS: list[str] = [f"{asset}_{side}" for asset in ASSETS for side in ("LONG", "SHORT")] + ["HOLD"]
 
 # --- Feature engine ---
 SHORT_WINDOW = 5
@@ -65,9 +67,12 @@ MIN_DASHBOARD_WRITE_INTERVAL_SECONDS = 0.1
 DASHBOARD_HEARTBEAT_SECONDS = 5
 
 # --- Dashboard ---
-DASHBOARD_HTML_PATH = "dashboard.html"
-STATE_JSON_PATH = "state.json"
+# Multiple bots (strategies) run side by side, each with its own dashboard,
+# state snapshot, and persisted portfolio; {bot} is filled with the bot's
+# name (see strategies.py). dashboard.html is a separate overview page
+# comparing all bots at a glance.
+DASHBOARD_HTML_PATH_TEMPLATE = "dashboard_{bot}.html"
+STATE_JSON_PATH_TEMPLATE = "state_{bot}.json"
+PORTFOLIO_STATE_PATH_TEMPLATE = "portfolio_state_{bot}.json"
+OVERVIEW_HTML_PATH = "dashboard.html"
 MAX_EQUITY_HISTORY_POINTS = 500
-
-# Persists the paper portfolio (cash, positions, trade log) across restarts.
-PORTFOLIO_STATE_PATH = "portfolio_state.json"

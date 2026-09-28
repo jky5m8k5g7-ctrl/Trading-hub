@@ -2,8 +2,11 @@ __pycache__/
 *.pyc
 .venv/
 dashboard.html
+dashboard_*.html
 state.json
+state_*.json
 .pytest_cache/
 .env
 bot.log
 portfolio_state.json
+portfolio_state_*.json

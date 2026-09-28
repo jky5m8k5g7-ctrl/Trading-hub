@@ -26,13 +26,21 @@ log = logging.getLogger(__name__)
 KRAKEN_WS_URL = "wss://ws.kraken.com/v2"
 
 # Kraken's WS v2 API uses "BASE/QUOTE" symbols, unlike the REST pair codes
-# in config.ASSETS.
+# in config.ASSETS - and not always the same base ticker (XBT vs BTC, XDG
+# vs DOGE), so this is hand-verified against the live WS v2 API rather than
+# derived from REST's "wsname" field (which uses the legacy X-prefixed
+# tickers the WS v2 API actually rejects).
 WS_SYMBOLS = {
     "BTC": "BTC/USD",
-    "ETH": "ETH/USD",
-    "SOL": "SOL/USD",
-    "DOGE": "DOGE/USD",
     "XRP": "XRP/USD",
+    "SOL": "SOL/USD",
+    "ETH": "ETH/USD",
+    "NEAR": "NEAR/USD",
+    "LTC": "LTC/USD",
+    "LINK": "LINK/USD",
+    "DOGE": "DOGE/USD",
+    "UNI": "UNI/USD",
+    "ARB": "ARB/USD",
 }
 _SYMBOL_TO_ASSET = {v: k for k, v in WS_SYMBOLS.items()}
 

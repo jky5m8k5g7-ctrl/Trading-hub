@@ -80,3 +80,31 @@ def test_write_dashboard_persists_prices_for_next_ticker_comparison(tmp_path):
     with open(html_path) as f:
         content = f.read()
     assert 'class="price pos"' in content
+
+
+def test_overview_page_links_to_each_bot_and_shows_pnl():
+    summaries = [
+        {
+            "name": "trend", "html_path": "dashboard_trend.html", "equity": 1010.0,
+            "starting_equity": 1000.0, "cash": 960.0, "drawdown_pct": 0.0,
+            "open_positions": 1, "last_action": "BTC_LONG", "last_confidence": 85.0,
+        },
+        {
+            "name": "breakout", "html_path": "dashboard_breakout.html", "equity": 990.0,
+            "starting_equity": 1000.0, "cash": 990.0, "drawdown_pct": 1.0,
+            "open_positions": 0, "last_action": "HOLD", "last_confidence": 0.0,
+        },
+    ]
+    html_out = dashboard.render_overview_html(summaries, {"BTC": 100.0})
+    assert "dashboard_trend.html" in html_out
+    assert "dashboard_breakout.html" in html_out
+    assert "+10" in html_out or "$10.00" in html_out  # trend's +$10 PnL
+    assert 'class="price ' in html_out  # ticker strip present
+
+
+def test_write_overview_writes_file(tmp_path):
+    path = str(tmp_path / "dashboard.html")
+    dashboard.write_overview([], {}, path)
+    with open(path) as f:
+        content = f.read()
+    assert "Bot Comparison" in content

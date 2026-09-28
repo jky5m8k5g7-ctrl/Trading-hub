@@ -72,3 +72,34 @@ def test_merge_live_prices_ignores_stale_live_tick():
     merged = main.merge_live_prices(candle_prices, live_feed)
 
     assert merged["BTC"] == 100.0
+
+
+def test_strategies_registry_covers_all_bots():
+    assert set(main.STRATEGIES.keys()) == {"trend", "mean_reversion", "breakout"}
+    for decide_fn in main.STRATEGIES.values():
+        assert callable(decide_fn)
+
+
+def test_bot_uses_isolated_state_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bot = main.Bot("trend", main.STRATEGIES["trend"])
+
+    assert bot.html_path == "dashboard_trend.html"
+    assert bot.state_path == "state_trend.json"
+    assert bot.portfolio_path == "portfolio_state_trend.json"
+    assert bot.portfolio.cash == bot.portfolio.starting_equity
+
+
+def test_bot_summary_reflects_portfolio_and_last_decision(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bot = main.Bot("trend", main.STRATEGIES["trend"])
+    bot.portfolio.open_position("BTC", direction=1, size_usd=50.0, price=100.0, fee_usd=0.0, action="BTC_LONG", now=1)
+    bot.decision = jev_engine.Decision(action="BTC_LONG", confidence=85.0, asset="BTC", direction=1, verdicts={})
+
+    summary = bot.summary({"BTC": 110.0})
+
+    assert summary["name"] == "trend"
+    assert summary["open_positions"] == 1
+    assert summary["last_action"] == "BTC_LONG"
+    assert summary["last_confidence"] == 85.0
+    assert summary["equity"] > summary["starting_equity"]

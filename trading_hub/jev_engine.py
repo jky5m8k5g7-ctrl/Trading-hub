@@ -113,10 +113,10 @@ def evaluate_asset(f: Features) -> AssetVerdict:
     return AssetVerdict(asset=f.asset, direction=direction, confidence=confidence, votes=votes)
 
 
-def decide(features_by_asset: dict[str, Features]) -> Decision:
-    """Evaluate every asset and pick the single best action, or HOLD."""
-    verdicts = {asset: evaluate_asset(f) for asset, f in features_by_asset.items()}
-
+def pick_best_action(verdicts: dict[str, AssetVerdict]) -> Decision:
+    """Pick the single highest-confidence non-neutral verdict across assets,
+    or HOLD if none clears the hard confidence floor. Shared by every
+    strategy in strategies.py so they all pick winners the same way."""
     best: AssetVerdict | None = None
     for verdict in verdicts.values():
         if verdict.direction == NEUTRAL:
@@ -131,3 +131,9 @@ def decide(features_by_asset: dict[str, Features]) -> Decision:
     suffix = "LONG" if best.direction == LONG else "SHORT"
     action = f"{best.asset}_{suffix}"
     return Decision(action=action, confidence=best.confidence, asset=best.asset, direction=best.direction, verdicts=verdicts)
+
+
+def decide(features_by_asset: dict[str, Features]) -> Decision:
+    """Evaluate every asset and pick the single best action, or HOLD."""
+    verdicts = {asset: evaluate_asset(f) for asset, f in features_by_asset.items()}
+    return pick_best_action(verdicts)

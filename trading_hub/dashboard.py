@@ -23,7 +23,7 @@ _PAGE_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="{refresh_seconds}">
-<title>Trading Hub - Live Paper Dashboard</title>
+<title>{bot_name} - Live Paper Dashboard</title>
 <style>
   body {{ font-family: -apple-system, Segoe UI, sans-serif; background: #0b0f14; color: #e6edf3; margin: 0; padding: 24px; }}
   h1 {{ font-size: 20px; margin-bottom: 4px; }}
@@ -48,7 +48,7 @@ _PAGE_TEMPLATE = """<!doctype html>
 </style>
 </head>
 <body>
-  <h1>Trading Hub - Live Paper Dashboard</h1>
+  <h1>{bot_name} - Live Paper Dashboard</h1>
   <div class="updated">Last updated: {updated_at}</div>
 
   <div class="ticker-strip">
@@ -238,6 +238,7 @@ def render_html(
     risk_verdict: RiskVerdict,
     regime: RegimeAssessment | None = None,
     previous_prices: dict[str, float] | None = None,
+    bot_name: str = "trading hub",
     refresh_seconds: int = 2,
 ) -> str:
     equity = portfolio.equity(prices)
@@ -271,6 +272,7 @@ def render_html(
     ) or "<tr><td colspan='6'>No trades yet</td></tr>"
 
     return _PAGE_TEMPLATE.format(
+        bot_name=html.escape(bot_name),
         refresh_seconds=refresh_seconds,
         updated_at=time.strftime("%Y-%m-%d %H:%M:%S %Z"),
         equity=equity,
@@ -289,6 +291,73 @@ def render_html(
     )
 
 
+_OVERVIEW_TEMPLATE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="{refresh_seconds}">
+<title>Trading Hub - Bot Comparison</title>
+<style>
+  body {{ font-family: -apple-system, Segoe UI, sans-serif; background: #0b0f14; color: #e6edf3; margin: 0; padding: 24px; }}
+  h1 {{ font-size: 20px; margin-bottom: 4px; }}
+  .updated {{ color: #8b949e; font-size: 12px; margin-bottom: 20px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid #30363d; font-size: 14px; }}
+  th {{ color: #8b949e; font-weight: 500; }}
+  a {{ color: #3987e5; text-decoration: none; font-weight: 600; }}
+  a:hover {{ text-decoration: underline; }}
+  .pos {{ color: #3fb950; }}
+  .neg {{ color: #f85149; }}
+  .ticker-strip {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }}
+  .ticker {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 16px; min-width: 120px; }}
+  .ticker .asset {{ color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }}
+  .ticker .price {{ font-size: 16px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }}
+</style>
+</head>
+<body>
+  <h1>Trading Hub - Bot Comparison</h1>
+  <div class="updated">Last updated: {updated_at}</div>
+  <div class="ticker-strip">
+    {ticker_strip}
+  </div>
+  <table>
+    <tr><th>Bot</th><th>Equity</th><th>P&amp;L</th><th>Cash</th><th>Drawdown</th><th>Open Positions</th><th>Last Decision</th><th>Confidence</th></tr>
+    {rows}
+  </table>
+</body>
+</html>
+"""
+
+
+def render_overview_html(bot_summaries: list[dict], prices: dict[str, float]) -> str:
+    """Comparison landing page across all running bots, linking to each
+    bot's own dashboard for the detail view."""
+    rows = []
+    for s in bot_summaries:
+        pnl = s["equity"] - s["starting_equity"]
+        rows.append(
+            f"<tr><td><a href='{html.escape(s['html_path'])}'>{html.escape(s['name'])}</a></td>"
+            f"<td>${s['equity']:,.2f}</td>"
+            f"<td class='{_pnl_class(pnl)}'>${pnl:+,.2f}</td>"
+            f"<td>${s['cash']:,.2f}</td>"
+            f"<td>{s['drawdown_pct']:.2f}%</td>"
+            f"<td>{s['open_positions']}</td>"
+            f"<td>{html.escape(s['last_action'])}</td>"
+            f"<td>{s['last_confidence']:.1f}%</td></tr>"
+        )
+    return _OVERVIEW_TEMPLATE.format(
+        refresh_seconds=2,
+        updated_at=time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        ticker_strip=render_ticker_strip(prices),
+        rows="".join(rows) or "<tr><td colspan='8'>No bots running</td></tr>",
+    )
+
+
+def write_overview(bot_summaries: list[dict], prices: dict[str, float], path: str) -> None:
+    with open(path, "w") as f:
+        f.write(render_overview_html(bot_summaries, prices))
+
+
 def _read_previous_prices(state_path: str) -> dict[str, float]:
     try:
         with open(state_path) as f:
@@ -302,14 +371,15 @@ def write_dashboard(
     prices: dict[str, float],
     decision: Decision,
     risk_verdict: RiskVerdict,
+    html_path: str,
+    state_path: str,
     regime: RegimeAssessment | None = None,
-    html_path: str = config.DASHBOARD_HTML_PATH,
-    state_path: str = config.STATE_JSON_PATH,
+    bot_name: str = "trading hub",
 ) -> None:
     previous_prices = _read_previous_prices(state_path)
 
     with open(html_path, "w") as f:
-        f.write(render_html(portfolio, prices, decision, risk_verdict, regime, previous_prices))
+        f.write(render_html(portfolio, prices, decision, risk_verdict, regime, previous_prices, bot_name=bot_name))
 
     state = {
         "updated_at": int(time.time()),

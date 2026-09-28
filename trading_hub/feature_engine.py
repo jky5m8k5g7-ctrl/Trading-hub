@@ -18,6 +18,8 @@ class Features:
     rsi: float  # 0-100
     volatility: float  # stdev of returns over the long window
     volume_change: float  # % change of recent volume vs prior volume
+    high_20: float  # rolling high over the prior LONG_WINDOW candles, excluding the current one
+    low_20: float  # rolling low over the prior LONG_WINDOW candles, excluding the current one
 
 
 def _sma(closes: list[float], window: int) -> float:
@@ -70,6 +72,12 @@ def compute_features(asset: str, candles: list[Candle]) -> Features | None:
     prior_vol = sum(volumes[-2 * config.SHORT_WINDOW:-config.SHORT_WINDOW]) or 1e-9
     volume_change = (recent_vol - prior_vol) / prior_vol * 100
 
+    # Prior channel, excluding the current candle, so a breakout strategy can
+    # compare the live/last price against where price has already been.
+    prior_candles = candles[-(config.LONG_WINDOW + 1):-1]
+    high_20 = max(c.high for c in prior_candles)
+    low_20 = min(c.low for c in prior_candles)
+
     return Features(
         asset=asset,
         last_price=closes[-1],
@@ -79,6 +87,8 @@ def compute_features(asset: str, candles: list[Candle]) -> Features | None:
         rsi=rsi,
         volatility=volatility,
         volume_change=volume_change,
+        high_20=high_20,
+        low_20=low_20,
     )
 
 
