@@ -5,3 +5,4 @@ dashboard.html
 state.json
 .pytest_cache/
 .env
+bot.log
